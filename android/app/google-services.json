@@ -1,0 +1,43 @@
+{
+  "project_info": {
+    "project_number": "1015238157429",
+    "project_id": "password-wallet-pro",
+    "storage_bucket": "password-wallet-pro.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1015238157429:android:abcdef123456",
+        "android_client_info": {
+          "package_name": "com.example.password_manager_simple"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1015238157429-ju9a2gc9idbg3c809t45b6m2tnl1huqn.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.password_manager_simple",
+            "certificate_hash": "2d0c264ca67cb15a5c930be0765ec4ee09867132"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD_MLtLvgcGZzwf44ug_--jXuVxhxl440M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1015238157429-ju9a2gc9idbg3c809t45b6m2tnl1huqn.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

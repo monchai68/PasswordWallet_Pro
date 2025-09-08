@@ -138,10 +138,15 @@ class BackupService {
       final backupData =
           jsonDecode(utf8.decode(fileBytes)) as Map<String, dynamic>;
 
-      // Verify password
-      final storedHash = backupData['password_hash'] as String?;
-      if (storedHash == null || storedHash != _simpleHash(password)) {
-        return {'success': false, 'message': 'Wrong password!'};
+      // Check if this is an automatic backup (no password required)
+      final isAutoBackup = backupData['auto_backup'] == true;
+
+      if (!isAutoBackup) {
+        // Verify password for regular backups
+        final storedHash = backupData['password_hash'] as String?;
+        if (storedHash == null || storedHash != _simpleHash(password)) {
+          return {'success': false, 'message': 'Wrong password!'};
+        }
       }
 
       onProgress?.call('Extracting data...');
