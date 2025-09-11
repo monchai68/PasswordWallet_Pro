@@ -1,0 +1,129 @@
+# แนวทางการอัปโหลดไฟล์ขึ้น Synology Drive โดยเขียนโปรแกรม
+
+## 1. สรุปภาพรวม
+โปรแกรมจะติดต่อกับ Synology DSM ผ่าน Web API โดยขั้นตอนหลักคือ
+1. **ยืนยันตัวตน (Authentication)** เพื่อขอ session ID (`sid`)  
+2. **ส่งคำสั่งอัปโหลด (Upload)** ไปยัง API endpoint พร้อมไฟล์ในฟอร์แมตรูปแบบ `multipart/form-data`  
+3. **ตรวจสอบผลลัพธ์** จาก JSON response  
+
+---
+
+## 2. ขอ Session ID (Login)
+1. ส่ง HTTP GET/POST ไปที่ `/webapi/auth.cgi`  
+2. ส่งพารามิเตอร์  
+   - `api=SYNO.API.Auth`  
+   - `version=2`  
+   - `method=login`  
+   - `account=<USERNAME>`  
+   - `passwd=<PASSWORD>`  
+   - `session=FileStation`  
+   - `format=sid`  
+3. อ่านค่า `sid` จาก JSON เช่น  
+   ```json
+   {
+     "data": { "sid": "XXXXXXXXXX" },
+     "success": true
+   }
+   ```
+
+---
+
+## 3. อัปโหลดไฟล์ด้วย Python (requests)
+```python
+import requests
+
+# 1. Login เพื่อรับ sid
+auth_url = 'http://<NAS_IP>:5000/webapi/auth.cgi'
+auth_params = {
+    'api': 'SYNO.API.Auth',
+    'version': '2',
+    'method': 'login',
+    'account': 'your_username',
+    'passwd': 'your_password',
+    'session': 'FileStation',
+    'format': 'sid'
+}
+resp = requests.get(auth_url, params=auth_params)
+sid = resp.json()['data']['sid']
+
+# 2. Upload ไฟล์
+upload_url = 'http://<NAS_IP>:5000/webapi/entry.cgi'
+params = { '_sid': sid }
+data = {
+    'api': 'SYNO.FileStation.Upload',
+    'version': '2',
+    'method': 'upload',
+    'path': '/Drive',          # โฟลเดอร์ปลายทาง
+    'create_parents': 'true',
+    'overwrite': 'true'
+}
+files = {
+    'file': open('example.txt', 'rb')
+}
+response = requests.post(upload_url, params=params, data=data, files=files)
+print(response.json())
+```
+- อย่าลืมวาง `_sid` ไว้ใน `params` และข้อมูล API ใน `data` จึงจะทำงานได้
+
+---
+
+## 4. อัปโหลดไฟล์ด้วย Bash (curl)
+```bash
+#!/bin/bash
+
+NAS_HOST="http://<NAS_IP>:5000"
+USER="your_username"
+PASS="your_password"
+
+# 1. Login เพื่อรับ sid
+SID=$(curl -s "${NAS_HOST}/webapi/auth.cgi" \
+  -G --data-urlencode "api=SYNO.API.Auth" \
+     --data-urlencode "version=2" \
+     --data-urlencode "method=login" \
+     --data-urlencode "account=${USER}" \
+     --data-urlencode "passwd=${PASS}" \
+     --data-urlencode "session=FileStation" \
+     --data-urlencode "format=sid" | jq -r '.data.sid')
+
+# 2. Upload ไฟล์
+curl -s "${NAS_HOST}/webapi/entry.cgi" \
+  -G --data-urlencode "_sid=${SID}" \
+  -F "api=SYNO.FileStation.Upload" \
+  -F "version=2" \
+  -F "method=upload" \
+  -F "path=/Drive" \
+  -F "create_parents=true" \
+  -F "overwrite=true" \
+  -F "file=@/path/to/example.txt"
+```
+- ตัวอย่างนี้ใช้ `jq` สำหรับดึงค่า `sid` และ `curl` สำหรับ multipart upload
+
+---
+
+## 5. เคล็ดลับ & Best Practices
+- ตั้งค่า HTTPS/SSL เพื่อความปลอดภัย  
+- จัดการ session หมดอายุ:  
+  - หลังใช้งานให้เรียก `SYNO.API.Auth&method=logout`  
+- ตรวจสอบข้อผิดพลาดจาก field `success` และ `error` ใน response  
+- ถ้าโฟลเดอร์ปลายทางยังไม่มี ให้ใช้ `SYNO.FileStation.CreateFolder` ก่อน  
+- สำหรับการอัปโหลดขนาดใหญ่ ให้แบ่งไฟล์เป็นชิ้น (chunked) ด้วย API `upload_chunk`  
+
+---
+
+## 6. ทางเลือก: ใช้ Synology Drive API โดยตรง
+นอกจาก FileStation คุณยังใช้ API ของ Drive package ได้ เช่น  
+- Endpoint: `/webapi/entry.cgi?api=SYNO.Drive.File&method=upload_file&version=2`  
+- พารามิเตอร์หลัก:  
+  - `path` (โฟลเดอร์ปลายทาง)  
+  - `size` (ขนาดไฟล์)  
+  - `session_id` (Drive session)  
+  - `_sid` (Auth session)  
+
+---
+
+ต่อยอด:  
+- เชื่อมต่อกับ GUI หรือปรับเป็นฟังก์ชันในแอป Android (Java/Kotlin)  
+- ทำ retry logic เมื่อล้มเหลวชั่วครั้งคราว  
+- สร้าง progress bar ด้วยการอ่าน `Content-Length` และส่ง chunk ทีละนิด  
+
+หากต้องการทราบรายละเอียดเชิงลึกของแต่ละ API หรือมีปัญหาข้อใดเพิ่มเติม แจ้งมาได้เลยครับ!

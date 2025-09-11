@@ -121,7 +121,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildSettingsItem(
             icon: Icons.cloud_sync_outlined,
             title: 'Sync to cloud',
-            subtitle: 'Sync your data to the cloud',
+            subtitle: 'Sync your data to Google Drive',
             onTap: () {
               _performAutomaticCloudBackup();
             },
@@ -2531,6 +2531,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       return {'success': false, 'message': 'Error creating backup: $e'};
     }
   }
+
+  // Synology Drive functions removed
 }
 
 enum _ExportMode { single, split }
