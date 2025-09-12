@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/category_service.dart';
+import '../services/google_drive_service.dart';
 import '../models/field_models.dart';
+import '../database/database_helper.dart';
+import 'dart:convert';
 import 'category_list_screen.dart';
 import 'category_editor_screen.dart';
 import 'favorites_screen.dart';
@@ -16,9 +19,11 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   final CategoryService _categoryService = CategoryService();
+  final GoogleDriveService _googleDriveService = GoogleDriveService();
   int totalPasswords = 0;
   int favoritePasswords = 0;
   bool isLoading = true;
+  final DatabaseHelper _databaseHelper = DatabaseHelper();
 
   @override
   void initState() {
@@ -79,6 +84,270 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _performAutomaticCloudBackup() async {
+    try {
+      if (!_googleDriveService.isSignedIn) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Signing in to Google Drive...'),
+            backgroundColor: Colors.blue[600],
+            duration: Duration(seconds: 2),
+          ),
+        );
+        final signInResult = await _googleDriveService.signIn();
+        if (signInResult['success'] != true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Please sign in to Google Drive first in Settings'),
+              backgroundColor: Colors.orange[600],
+              duration: Duration(seconds: 3),
+              action: SnackBarAction(
+                label: 'Sign In',
+                textColor: Colors.white,
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const SettingsScreen(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          );
+          return;
+        }
+      }
+
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C5CE7)),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Creating and uploading backup...',
+                style: GoogleFonts.inter(fontSize: 14, color: Colors.grey),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      // Create automatic backup without asking for password
+      final db = await _databaseHelper.database;
+      final categories = await db.query('categories');
+      final fields = await db.query('fields');
+      final items = await db.query('password_items');
+      final backupData = {
+        'auto_backup': true,
+        'data': {
+          'version': 1,
+          'createdAt': DateTime.now().toIso8601String(),
+          'categories': categories,
+          'fields': fields,
+          'password_items': items,
+        },
+      };
+      final jsonBytes = utf8.encode(jsonEncode(backupData));
+      const fileName = 'wallet.crypt';
+
+      final uploadResult = await _googleDriveService.uploadBackupData(
+        fileData: jsonBytes,
+        fileName: fileName,
+      );
+
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        if (uploadResult['success'] == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Backup successfully uploaded to Google Drive!'),
+              backgroundColor: Colors.green[600],
+              duration: Duration(seconds: 3),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(uploadResult['message'] ?? 'Upload failed'),
+              backgroundColor: Colors.red[600],
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('An error occurred: $e'),
+            backgroundColor: Colors.red[600],
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _performGoogleDriveSync(String password) async {
+    // Show loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: const Color(0xFF2d2d2d),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF6C5CE7)),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Syncing to Google Drive...',
+              style: GoogleFonts.inter(fontSize: 14, color: Colors.white),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      // Check if signed in to Google Drive
+      bool isSignedIn = _googleDriveService.isSignedIn;
+
+      if (!isSignedIn) {
+        Navigator.pop(context); // Close loading dialog
+        _showSignInDialog();
+        return;
+      }
+
+      // Navigate to Settings screen to use existing sync functionality
+      Navigator.pop(context); // Close loading dialog
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => const SettingsScreen()),
+      );
+
+      // Refresh statistics when coming back
+      _loadStatistics();
+    } catch (e) {
+      Navigator.pop(context); // Close loading dialog
+      _showErrorDialog('Sync failed: ${e.toString()}');
+    }
+  }
+
+  void _showSignInDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: const Color(0xFF2d2d2d),
+        title: Text(
+          'Google Drive Sign In Required',
+          style: GoogleFonts.inter(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.white,
+          ),
+        ),
+        content: Text(
+          'Please sign in to Google Drive in Settings first to enable sync.',
+          style: GoogleFonts.inter(fontSize: 14, color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(
+              'Cancel',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white70,
+              ),
+            ),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6C5CE7),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text(
+              'Go to Settings',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        backgroundColor: const Color(0xFF2d2d2d),
+        title: Text(
+          'Error',
+          style: GoogleFonts.inter(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Colors.red,
+          ),
+        ),
+        content: Text(
+          message,
+          style: GoogleFonts.inter(fontSize: 14, color: Colors.white70),
+        ),
+        actions: [
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF6C5CE7),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+            child: Text(
+              'OK',
+              style: GoogleFonts.inter(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -94,6 +363,13 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         backgroundColor: const Color(0xFF2d2d2d),
         elevation: 0,
         automaticallyImplyLeading: false,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.cloud_upload),
+            tooltip: 'Upload to Cloud',
+            onPressed: isLoading ? null : _performAutomaticCloudBackup,
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Padding(

@@ -120,8 +120,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildDivider(),
           _buildSettingsItem(
             icon: Icons.cloud_sync_outlined,
-            title: 'Sync to cloud',
-            subtitle: 'Sync your data to the cloud',
+            title: 'Sync to Google Drive',
+            subtitle: 'Sync your data to Google Drive',
             onTap: () {
               _performAutomaticCloudBackup();
             },
