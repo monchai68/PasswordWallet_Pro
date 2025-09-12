@@ -1,4 +1,4 @@
-# password_manager_simple
+# Password Wallet Pro
 
 A new Flutter project.
 
