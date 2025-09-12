@@ -1,5 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'package:crypto/crypto.dart';
 
 import 'package:file_picker/file_picker.dart';
 
@@ -7,6 +9,33 @@ import '../database/database_helper.dart';
 
 /// Simple Backup and Restore service (no heavy encryption)
 class BackupService {
+  // Derive a 32-byte key from password (SHA256)
+  String _deriveKey(String password) {
+    return sha256.convert(utf8.encode(password)).toString().substring(0, 32);
+  }
+
+  String _encryptData(String plainText, String password) {
+    final key = encrypt.Key.fromUtf8(_deriveKey(password));
+    final iv = encrypt.IV.fromSecureRandom(16);
+    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+    final encrypted = encrypter.encrypt(plainText, iv: iv);
+    // แนบ IV (base64) + ':' + ข้อมูล base64
+    return '${iv.base64}:${encrypted.base64}';
+  }
+
+  String _decryptData(String encryptedText, String password) {
+    // แยก IV และข้อมูล
+    final parts = encryptedText.split(':');
+    if (parts.length != 2) {
+      throw Exception('Invalid encrypted format');
+    }
+    final iv = encrypt.IV.fromBase64(parts[0]);
+    final data = parts[1];
+    final key = encrypt.Key.fromUtf8(_deriveKey(password));
+    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+    return encrypter.decrypt64(data, iv: iv);
+  }
+
   final DatabaseHelper _db = DatabaseHelper();
 
   /// Simple hash
@@ -35,20 +64,19 @@ class BackupService {
 
       // Build lightweight JSON payload
       final backupData = {
-        'password_hash': _simpleHash(password),
-        'data': {
-          'version': 1,
-          'createdAt': DateTime.now().toIso8601String(),
-          'categories': categories,
-          'fields': fields,
-          'password_items': items,
-        },
+        'version': 1,
+        'createdAt': DateTime.now().toIso8601String(),
+        'categories': categories,
+        'fields': fields,
+        'password_items': items,
       };
 
-      onProgress?.call('Saving...');
+      onProgress?.call('Encrypting...');
 
-      // Encode JSON and ask user where to save
-      final jsonBytes = utf8.encode(jsonEncode(backupData));
+      // Encrypt JSON string
+      final jsonString = jsonEncode(backupData);
+      final encryptedString = _encryptData(jsonString, password);
+      final jsonBytes = utf8.encode(encryptedString);
       final String defaultName =
           'PasswordWallet_${DateTime.now().toIso8601String().replaceAll(':', '-')}.pwmbackup';
 
@@ -134,28 +162,34 @@ class BackupService {
     try {
       onProgress?.call('Reading backup file...');
 
-      // Parse JSON payload
-      final backupData =
-          jsonDecode(utf8.decode(fileBytes)) as Map<String, dynamic>;
-
-      // Check if this is an automatic backup (no password required)
-      final isAutoBackup = backupData['auto_backup'] == true;
-
-      if (!isAutoBackup) {
-        // Verify password for regular backups
-        final storedHash = backupData['password_hash'] as String?;
-        if (storedHash == null || storedHash != _simpleHash(password)) {
-          return {'success': false, 'message': 'Wrong password!'};
+      // Decrypt and parse JSON payload
+      final fileContent = utf8.decode(fileBytes);
+      String jsonString;
+      Map<String, dynamic> backupData;
+      // Try to detect if file is encrypted (base64) or plain JSON
+      final isProbablyBase64 = !fileContent.trim().startsWith('{');
+      if (isProbablyBase64) {
+        try {
+          jsonString = _decryptData(fileContent, password);
+          backupData = jsonDecode(jsonString) as Map<String, dynamic>;
+        } catch (e) {
+          return {
+            'success': false,
+            'message': 'Wrong password or corrupt backup!',
+          };
         }
+      } else {
+        // fallback: plain JSON (old backup)
+        backupData = jsonDecode(fileContent) as Map<String, dynamic>;
       }
 
       onProgress?.call('Extracting data...');
 
-      final data = backupData['data'] as Map<String, dynamic>;
-      final categories = (data['categories'] as List)
+      final categories = (backupData['categories'] as List)
           .cast<Map<String, dynamic>>();
-      final fields = (data['fields'] as List).cast<Map<String, dynamic>>();
-      final items = (data['password_items'] as List)
+      final fields = (backupData['fields'] as List)
+          .cast<Map<String, dynamic>>();
+      final items = (backupData['password_items'] as List)
           .cast<Map<String, dynamic>>();
 
       onProgress?.call('Updating database...');
