@@ -3,8 +3,7 @@ import 'package:flutter/widgets.dart';
 class CustomRefreshIcon extends StatelessWidget {
   final double size;
   final Color? color;
-  const CustomRefreshIcon({Key? key, this.size = 24.0, this.color})
-    : super(key: key);
+  const CustomRefreshIcon({super.key, this.size = 24.0, this.color});
 
   @override
   Widget build(BuildContext context) {
