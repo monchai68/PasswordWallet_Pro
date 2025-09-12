@@ -14,20 +14,6 @@
 				"$flutter-build"
 			],
 			"group": "build"
-		},
-		{
-			"label": "flutter pub get (agent)",
-			"type": "shell",
-			"command": "flutter",
-			"args": [
-				"pub",
-				"get"
-			],
-			"isBackground": false,
-			"problemMatcher": [
-				"$dart"
-			],
-			"group": "build"
 		}
 	]
 }
