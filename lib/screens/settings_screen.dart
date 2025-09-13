@@ -8,7 +8,6 @@ import 'change_password_screen.dart';
 import '../services/csv_service.dart';
 import '../services/backup_service.dart';
 import '../services/google_drive_service.dart';
-import '../database/database_helper.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -23,7 +22,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isImporting = false;
   final BackupService _backupService = BackupService();
   final GoogleDriveService _googleDriveService = GoogleDriveService();
-  final DatabaseHelper _databaseHelper = DatabaseHelper();
 
   @override
   void initState() {
@@ -85,18 +83,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           _buildSettingsItem(
             icon: Icons.backup_outlined,
             title: 'Backup',
-            subtitle: 'Backup your data to cloud or local storage',
+            subtitle: 'Create encrypted backup file (no password needed)',
             onTap: () {
-              _showBackupDialog();
+              _performBackup();
             },
           ),
           _buildDivider(),
           _buildSettingsItem(
             icon: Icons.restore_outlined,
             title: 'Restore',
-            subtitle: 'Restore data from backup file',
+            subtitle: 'Restore from encrypted backup (auto-detect format)',
             onTap: () {
-              _showRestoreDialog();
+              _performRestore();
             },
           ),
           _buildDivider(),
@@ -254,167 +252,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  void _showBackupDialog() {
-    final passwordController = TextEditingController();
-    bool obscure = true;
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(
-            'Backup Data',
-            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Create an encrypted backup file (.pwmbackup).',
-                style: GoogleFonts.inter(),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: passwordController,
-                obscureText: obscure,
-                decoration: InputDecoration(
-                  labelText: 'Encryption password',
-                  suffixIcon: StatefulBuilder(
-                    builder: (context, setSB) {
-                      return IconButton(
-                        icon: Icon(
-                          obscure ? Icons.visibility : Icons.visibility_off,
-                        ),
-                        onPressed: () => setSB(() => obscure = !obscure),
-                      );
-                    },
-                  ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(
-                'Cancel',
-                style: GoogleFonts.inter(color: Colors.grey),
-              ),
-            ),
-            TextButton(
-              onPressed: () async {
-                final pwd = passwordController.text;
-                if (pwd.isEmpty) return;
+  // Password dialog removed; backup now uses internal key.
 
-                // Close current dialog first
-                Navigator.pop(context);
+  // Restore dialog removed; simple one-tap restore with merge mode (default).
 
-                // Wait a frame for the dialog to close completely
-                await Future.delayed(const Duration(milliseconds: 100));
-
-                // Call separate function to perform backup
-                if (mounted) {
-                  _performBackup(pwd);
-                }
-              },
-              child: Text(
-                'Backup',
-                style: GoogleFonts.inter(color: const Color(0xFF5A67D8)),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showRestoreDialog() {
-    final passwordController = TextEditingController();
-    bool obscure = true;
-    String mode = 'merge';
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text(
-            'Restore Data',
-            style: GoogleFonts.inter(fontWeight: FontWeight.bold),
-          ),
-          content: StatefulBuilder(
-            builder: (context, setSB) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Restore from .pwmbackup file',
-                    style: GoogleFonts.inter(),
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButton<String>(
-                    value: mode,
-                    items: const [
-                      DropdownMenuItem(value: 'merge', child: Text('Merge')),
-                      DropdownMenuItem(
-                        value: 'replace',
-                        child: Text('Replace'),
-                      ),
-                    ],
-                    onChanged: (v) => setSB(() => mode = v ?? 'merge'),
-                  ),
-                  TextField(
-                    controller: passwordController,
-                    obscureText: obscure,
-                    decoration: InputDecoration(
-                      labelText: 'Encryption password',
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscure ? Icons.visibility : Icons.visibility_off,
-                        ),
-                        onPressed: () => setSB(() => obscure = !obscure),
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text(
-                'Cancel',
-                style: GoogleFonts.inter(color: Colors.grey),
-              ),
-            ),
-            TextButton(
-              onPressed: () async {
-                final pwd = passwordController.text;
-                if (pwd.isEmpty) return;
-
-                // Close current dialog first
-                Navigator.pop(context);
-
-                // Wait a frame for the dialog to close completely
-                await Future.delayed(const Duration(milliseconds: 100));
-
-                // Call separate function to perform restore
-                if (mounted) {
-                  _performRestore(pwd, mode);
-                }
-              },
-              child: Text(
-                'Restore',
-                style: GoogleFonts.inter(color: const Color(0xFF5A67D8)),
-              ),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Future<void> _performBackup(String password) async {
+  Future<void> _performBackup() async {
     // Show loading dialog
     showDialog(
       context: context,
@@ -437,10 +279,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       // Do the backup work
       final result = await _backupService.createBackup(
-        password: password,
-        onProgress: (message) {
-          // Just do work, no UI updates
-        },
+        onProgress: (message) {},
       );
 
       // Close loading dialog
@@ -460,7 +299,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
-  Future<void> _performRestore(String password, String mode) async {
+  Future<void> _performRestore([String mode = 'merge']) async {
     // Show loading dialog
     showDialog(
       context: context,
@@ -483,11 +322,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       // Do the restore work
       final result = await _backupService.pickAndRestoreBackup(
-        password: password,
         mode: mode,
-        onProgress: (message) {
-          // Just do work, no UI updates
-        },
+        onProgress: (message) {},
       );
 
       // Close loading dialog
@@ -1413,7 +1249,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   onPressed: () {
                     if (passwordController.text.isNotEmpty) {
                       Navigator.pop(context);
-                      _performUploadBackup(passwordController.text);
+                      _performUploadBackup();
                     }
                   },
                   style: ElevatedButton.styleFrom(
@@ -1439,7 +1275,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     );
   }
 
-  Future<void> _performUploadBackup(String password) async {
+  Future<void> _performUploadBackup() async {
     // Show loading dialog
     showDialog(
       context: context,
@@ -1465,10 +1301,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     try {
       // First create a local backup
       final backupResult = await _backupService.createBackup(
-        password: password,
-        onProgress: (message) {
-          // Progress updates handled internally
-        },
+        onProgress: (message) {},
       );
 
       if (backupResult['success'] == true && backupResult['filePath'] != null) {
@@ -1690,7 +1523,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           // For automatic backup, restore without password
           final restoreResult = await _backupService.restoreBackup(
             fileBytes: fileBytes,
-            password: '', // Empty password for auto backup
+            // password removed: backups now use internal key
             mode: 'replace', // Replace existing data
             onProgress: (message) {
               print('Restore progress: $message');
@@ -1878,7 +1711,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       final restoreResult = await _backupService.restoreBackup(
         fileBytes: fileBytes,
-        password: password,
         mode: 'replace',
         onProgress: (message) {
           print('Restore progress: $message');
@@ -2489,43 +2321,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // Create automatic backup without password prompt
   Future<Map<String, dynamic>> _createAutomaticBackup() async {
     try {
-      final db = await _databaseHelper.database;
-      final categories = await db.query('categories');
-      final fields = await db.query('fields');
-      final items = await db.query('password_items');
-
-      // Build lightweight JSON payload (without password hash for automatic backup)
-      final backupData = {
-        'auto_backup': true, // Flag to indicate this is an automatic backup
-        'data': {
-          'version': 1,
-          'createdAt': DateTime.now().toIso8601String(),
-          'categories': categories,
-          'fields': fields,
-          'password_items': items,
-        },
-      };
-
-      // Create a simple fixed filename
+      final memResult = await _backupService.createEncryptedBackupInMemory();
+      if (memResult['success'] != true) {
+        return memResult;
+      }
       const fileName = 'wallet.crypt';
-
-      // For automatic backup, we create the file data in memory
-      final jsonBytes = utf8.encode(jsonEncode(backupData));
-
-      // Create a temporary file path (this will be handled by the Google Drive service)
       const tempPath = '/temp/wallet.crypt';
-
+      final encryptedBytes = memResult['encryptedBytes'] as Uint8List;
       return {
         'success': true,
         'message': 'Automatic backup created successfully',
         'filePath': tempPath,
-        'fileData': jsonBytes, // Include the actual file data
+        'fileData': encryptedBytes.toList(),
         'fileName': fileName,
-        'counts': {
-          'categories': categories.length,
-          'fields': fields.length,
-          'items': items.length,
-        },
+        'counts': memResult['counts'],
       };
     } catch (e) {
       return {'success': false, 'message': 'Error creating backup: $e'};

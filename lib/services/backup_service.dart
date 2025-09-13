@@ -1,55 +1,121 @@
 import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
-import 'package:encrypt/encrypt.dart' as encrypt;
 import 'package:crypto/crypto.dart';
+import 'package:encrypt/encrypt.dart' as encrypt;
+import 'encryption_key_service.dart';
 
 import 'package:file_picker/file_picker.dart';
 
 import '../database/database_helper.dart';
 
-/// Simple Backup and Restore service (no heavy encryption)
+/// Backup and Restore service with internal key encryption (v2) and
+/// backward compatibility for legacy (v1) password-based backups.
 class BackupService {
-  // Derive a 32-byte key from password (SHA256)
-  String _deriveKey(String password) {
-    return sha256.convert(utf8.encode(password)).toString().substring(0, 32);
+  final DatabaseHelper _db = DatabaseHelper();
+  final EncryptionKeyService _keyService = EncryptionKeyService();
+
+  // ---- New v2 format constants ----
+  // Format: PWMV2:base64(iv):base64(cipher):base64(hmac)
+  static const String v2Prefix = 'PWMV2';
+
+  // HMAC key derivation: split the 32-byte master key into two halves.
+  Map<String, Uint8List> _deriveEncryptionAndMacKeys(List<int> masterKey) {
+    final keyBytes = Uint8List.fromList(masterKey);
+    final encKey = keyBytes.sublist(0, 16); // 128-bit AES key (sufficient)
+    final macKey = keyBytes.sublist(16); // remaining 128-bit for HMAC
+    return {'enc': encKey, 'mac': macKey};
   }
 
-  String _encryptData(String plainText, String password) {
-    final key = encrypt.Key.fromUtf8(_deriveKey(password));
-    final iv = encrypt.IV.fromSecureRandom(16);
-    final encrypter = encrypt.Encrypter(encrypt.AES(key));
-    final encrypted = encrypter.encrypt(plainText, iv: iv);
-    // แนบ IV (base64) + ':' + ข้อมูล base64
-    return '${iv.base64}:${encrypted.base64}';
+  String _encryptV2(String plainText, List<int> masterKey) {
+    final keys = _deriveEncryptionAndMacKeys(masterKey);
+    final encKey = encrypt.Key(Uint8List.fromList(keys['enc']!));
+    final ivBytes = _secureRandomBytes(16);
+    final iv = encrypt.IV(Uint8List.fromList(ivBytes));
+    final aes = encrypt.Encrypter(
+      encrypt.AES(encKey, mode: encrypt.AESMode.cbc, padding: 'PKCS7'),
+    );
+    final cipher = aes.encrypt(plainText, iv: iv);
+
+    // HMAC over prefix|iv|cipher
+    final macInput = <int>[]
+      ..addAll(utf8.encode(v2Prefix))
+      ..addAll(ivBytes)
+      ..addAll(cipher.bytes);
+    final hmacSha256 = Hmac(sha256, keys['mac']!);
+    final mac = hmacSha256.convert(macInput).bytes;
+
+    return [
+      v2Prefix,
+      base64Encode(ivBytes),
+      base64Encode(cipher.bytes),
+      base64Encode(mac),
+    ].join(':');
   }
 
-  String _decryptData(String encryptedText, String password) {
-    // แยก IV และข้อมูล
-    final parts = encryptedText.split(':');
-    if (parts.length != 2) {
-      throw Exception('Invalid encrypted format');
+  String _decryptV2(String data, List<int> masterKey) {
+    final parts = data.split(':');
+    if (parts.length != 4 || parts[0] != v2Prefix) {
+      throw Exception('Invalid v2 format');
     }
+    final ivBytes = base64Decode(parts[1]);
+    final cipherBytes = base64Decode(parts[2]);
+    final macBytes = base64Decode(parts[3]);
+
+    final keys = _deriveEncryptionAndMacKeys(masterKey);
+
+    // Verify HMAC
+    final macInput = <int>[]
+      ..addAll(utf8.encode(v2Prefix))
+      ..addAll(ivBytes)
+      ..addAll(cipherBytes);
+    final hmacSha256 = Hmac(sha256, keys['mac']!);
+    final expectedMac = hmacSha256.convert(macInput).bytes;
+    if (!_constantTimeEquals(macBytes, expectedMac)) {
+      throw Exception('Integrity check failed');
+    }
+
+    final encKey = encrypt.Key(Uint8List.fromList(keys['enc']!));
+    final iv = encrypt.IV(ivBytes);
+    final aes = encrypt.Encrypter(
+      encrypt.AES(encKey, mode: encrypt.AESMode.cbc, padding: 'PKCS7'),
+    );
+    final decrypted = aes.decrypt(encrypt.Encrypted(cipherBytes), iv: iv);
+    return decrypted;
+  }
+
+  // Legacy v1 decrypt (format ivBase64:encryptedBase64 using SHA256(password) first 32 chars)
+  String _decryptLegacyV1(String encryptedText, String password) {
+    final parts = encryptedText.split(':');
+    if (parts.length != 2) throw Exception('Invalid encrypted format');
     final iv = encrypt.IV.fromBase64(parts[0]);
     final data = parts[1];
-    final key = encrypt.Key.fromUtf8(_deriveKey(password));
-    final encrypter = encrypt.Encrypter(encrypt.AES(key));
+    final keyString = sha256
+        .convert(utf8.encode(password))
+        .toString()
+        .substring(0, 32);
+    final encrypter = encrypt.Encrypter(
+      encrypt.AES(encrypt.Key.fromUtf8(keyString)),
+    );
     return encrypter.decrypt64(data, iv: iv);
   }
 
-  final DatabaseHelper _db = DatabaseHelper();
-
-  /// Simple hash
-  String _simpleHash(String password) {
-    int hash = 0;
-    for (int i = 0; i < password.length; i++) {
-      hash = ((hash << 5) - hash + password.codeUnitAt(i)) & 0xFFFFFFFF;
-    }
-    return hash.toRadixString(16);
+  List<int> _secureRandomBytes(int length) {
+    final rnd = Random.secure();
+    return List<int>.generate(length, (_) => rnd.nextInt(256));
   }
 
-  /// Create a simple backup file - fast, no heavy encryption
+  bool _constantTimeEquals(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    int diff = 0;
+    for (var i = 0; i < a.length; i++) {
+      diff |= a[i] ^ b[i];
+    }
+    return diff == 0;
+  }
+
+  /// Create an encrypted backup file using internal key (v2).
   Future<Map<String, dynamic>> createBackup({
-    required String password,
     Function(String)? onProgress,
   }) async {
     try {
@@ -71,11 +137,11 @@ class BackupService {
         'password_items': items,
       };
 
-      onProgress?.call('Encrypting...');
+      onProgress?.call('Encrypting (v2)...');
 
-      // Encrypt JSON string
       final jsonString = jsonEncode(backupData);
-      final encryptedString = _encryptData(jsonString, password);
+      final masterKey = await _keyService.getOrCreateKey();
+      final encryptedString = _encryptV2(jsonString, masterKey);
       final jsonBytes = utf8.encode(encryptedString);
       final String defaultName =
           'PasswordWallet_${DateTime.now().toIso8601String().replaceAll(':', '-')}.pwmbackup';
@@ -114,9 +180,50 @@ class BackupService {
     }
   }
 
-  /// Pick a backup file and restore
+  /// Build an encrypted backup entirely in memory (no file picker) and
+  /// return the encrypted bytes plus counts for UI/analytics.
+  Future<Map<String, dynamic>> createEncryptedBackupInMemory({
+    Function(String)? onProgress,
+  }) async {
+    try {
+      onProgress?.call('Reading database...');
+      final db = await _db.database;
+      final categories = await db.query('categories');
+      final fields = await db.query('fields');
+      final items = await db.query('password_items');
+
+      onProgress?.call('Preparing backup...');
+      final backupData = {
+        'version': 1,
+        'createdAt': DateTime.now().toIso8601String(),
+        'categories': categories,
+        'fields': fields,
+        'password_items': items,
+      };
+
+      onProgress?.call('Encrypting (v2)...');
+      final masterKey = await _keyService.getOrCreateKey();
+      final encryptedString = _encryptV2(jsonEncode(backupData), masterKey);
+      final bytes = Uint8List.fromList(utf8.encode(encryptedString));
+
+      onProgress?.call('Completed');
+      return {
+        'success': true,
+        'encryptedBytes': bytes,
+        'counts': {
+          'categories': categories.length,
+          'fields': fields.length,
+          'items': items.length,
+        },
+      };
+    } catch (e) {
+      return {'success': false, 'message': 'Error: $e'};
+    }
+  }
+
+  /// Pick a backup file and restore (auto-detects v2 or legacy).
   Future<Map<String, dynamic>> pickAndRestoreBackup({
-    required String password,
+    String legacyPassword = '', // only needed for legacy files
     String mode = 'merge',
     Function(String)? onProgress,
   }) async {
@@ -143,7 +250,7 @@ class BackupService {
 
       return await restoreBackup(
         fileBytes: file.bytes!,
-        password: password,
+        legacyPassword: legacyPassword,
         mode: mode,
         onProgress: onProgress,
       );
@@ -152,10 +259,10 @@ class BackupService {
     }
   }
 
-  /// Restore from simple backup file
+  /// Restore from backup file (v2 preferred, legacy supported).
   Future<Map<String, dynamic>> restoreBackup({
     required Uint8List fileBytes,
-    required String password,
+    String legacyPassword = '',
     String mode = 'merge',
     Function(String)? onProgress,
   }) async {
@@ -166,21 +273,31 @@ class BackupService {
       final fileContent = utf8.decode(fileBytes);
       String jsonString;
       Map<String, dynamic> backupData;
-      // Try to detect if file is encrypted (base64) or plain JSON
-      final isProbablyBase64 = !fileContent.trim().startsWith('{');
-      if (isProbablyBase64) {
+      if (fileContent.startsWith(v2Prefix)) {
+        // v2 format
         try {
-          jsonString = _decryptData(fileContent, password);
+          final masterKey = await _keyService.getOrCreateKey();
+          jsonString = _decryptV2(fileContent, masterKey);
           backupData = jsonDecode(jsonString) as Map<String, dynamic>;
         } catch (e) {
           return {
             'success': false,
-            'message': 'Wrong password or corrupt backup!',
+            'message': 'Integrity/Decryption failed: $e',
           };
         }
-      } else {
-        // fallback: plain JSON (old backup)
+      } else if (fileContent.contains(':') && legacyPassword.isNotEmpty) {
+        // presume legacy encrypted format iv:cipher
+        try {
+          jsonString = _decryptLegacyV1(fileContent, legacyPassword);
+          backupData = jsonDecode(jsonString) as Map<String, dynamic>;
+        } catch (e) {
+          return {'success': false, 'message': 'Legacy decryption failed'};
+        }
+      } else if (fileContent.trim().startsWith('{')) {
+        // plain JSON fallback
         backupData = jsonDecode(fileContent) as Map<String, dynamic>;
+      } else {
+        return {'success': false, 'message': 'Unknown backup format'};
       }
 
       onProgress?.call('Extracting data...');
