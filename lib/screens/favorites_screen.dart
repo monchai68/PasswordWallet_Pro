@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'package:google_fonts/google_fonts.dart';
 import '../services/category_service.dart';
 import '../models/field_models.dart';
@@ -11,13 +12,91 @@ class FavoritesScreen extends StatefulWidget {
   State<FavoritesScreen> createState() => _FavoritesScreenState();
 }
 
-class _FavoritesScreenState extends State<FavoritesScreen> {
+class _FavoritesScreenState extends State<FavoritesScreen>
+    with TickerProviderStateMixin {
   final CategoryService _categoryService = CategoryService();
   List<PasswordItemModel> favoriteItems = [];
   List<PasswordItemModel> filteredFavoriteItems = [];
   bool isLoading = true;
   bool isSearching = false;
   final TextEditingController _searchController = TextEditingController();
+  // Track rows that are animating out (fade+shrink) and their timers for safe cancellation
+  final Set<int> _removingIds = {}; // ids currently fading/shrinking out
+  final Map<int, Timer> _removalTimers =
+      {}; // timers that will actually remove after animation
+
+  static const _removalAnimationDuration = Duration(milliseconds: 300);
+
+  Future<void> _toggleFavorite(PasswordItemModel item) async {
+    final originalFav = item.isFavorite; // should be true on this screen
+    final targetFav = !originalFav; // normally false when unfavoriting
+    final updated = item.copyWith(isFavorite: targetFav);
+
+    void _apply(PasswordItemModel newItem) {
+      final i1 = favoriteItems.indexWhere((e) => e.id == newItem.id);
+      if (i1 != -1) favoriteItems[i1] = newItem;
+      final i2 = filteredFavoriteItems.indexWhere((e) => e.id == newItem.id);
+      if (i2 != -1) filteredFavoriteItems[i2] = newItem;
+    }
+
+    // Optimistic UI: start animation instead of instant removal
+    if (!targetFav) {
+      final id = item.id!;
+      setState(() {
+        _apply(
+          updated,
+        ); // update model so heart reflects new state if still visible
+        _removingIds.add(id);
+      });
+
+      // Schedule actual removal after animation completes
+      _removalTimers[id]?.cancel();
+      _removalTimers[id] = Timer(_removalAnimationDuration, () {
+        if (!mounted) return;
+        setState(() {
+          favoriteItems.removeWhere((e) => e.id == id);
+          filteredFavoriteItems.removeWhere((e) => e.id == id);
+          _removingIds.remove(id);
+          _removalTimers.remove(id);
+        });
+      });
+    } else {
+      // (Rare) case toggling to favorite again (not typical within favorites screen)
+      setState(() => _apply(updated));
+    }
+
+    final success = await _categoryService.toggleFavorite(item.id!, targetFav);
+    if (!success && mounted) {
+      // Rollback: cancel any pending removal and restore item state
+      final id = item.id!;
+      _removalTimers[id]?.cancel();
+      _removalTimers.remove(id);
+
+      setState(() {
+        _removingIds.remove(id); // stop animation
+        if (targetFav == false) {
+          // We attempted to remove but failed -> ensure item is back and marked favorite
+          final restored = item.copyWith(isFavorite: originalFav);
+          final exists = favoriteItems.any((e) => e.id == id);
+          if (!exists) {
+            favoriteItems.add(restored);
+          }
+          final existsF = filteredFavoriteItems.any((e) => e.id == id);
+          if (!existsF) {
+            filteredFavoriteItems.add(restored);
+          }
+          _apply(restored);
+        } else {
+          // Attempted to favorite (rare) but failed
+          _apply(item.copyWith(isFavorite: originalFav));
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update favorite')),
+      );
+    }
+  }
 
   // Get category info for icons
   IconData _getCategoryIcon(String categoryName) {
@@ -57,6 +136,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
 
   @override
   void dispose() {
+    for (final timer in _removalTimers.values) {
+      timer.cancel();
+    }
+    _removalTimers.clear();
     _searchController.dispose();
     super.dispose();
   }
@@ -224,7 +307,10 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Widget _buildFavoriteItem(PasswordItemModel passwordItem) {
-    return Container(
+    final isRemoving =
+        passwordItem.id != null && _removingIds.contains(passwordItem.id);
+
+    final row = Container(
       color: Colors.white,
       child: ListTile(
         leading: Container(
@@ -252,25 +338,12 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
           passwordItem.categoryName,
           style: GoogleFonts.inter(fontSize: 12, color: Colors.grey[600]),
         ),
-        trailing: GestureDetector(
-          onTap: () async {
-            // Toggle favorite status
-            final newFavoriteStatus = !passwordItem.isFavorite;
-            final success = await _categoryService.toggleFavorite(
-              passwordItem.id!,
-              newFavoriteStatus,
-            );
-
-            if (success) {
-              // Refresh the list to remove unfavorited items
-              _loadFavoriteItems();
-            }
-          },
-          child: Icon(Icons.favorite, color: Colors.red, size: 24),
+        trailing: IconButton(
+          onPressed: () => _toggleFavorite(passwordItem),
+          icon: const Icon(Icons.favorite, color: Colors.red, size: 24),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         onTap: () async {
-          // Navigate to item detail screen
           final result = await Navigator.push(
             context,
             MaterialPageRoute(
@@ -278,20 +351,31 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                 item: passwordItem,
                 categoryName: passwordItem.categoryName,
                 onItemUpdated: () {
-                  _loadFavoriteItems(); // Refresh list when item is updated
+                  _loadFavoriteItems();
                 },
                 onItemDeleted: () {
-                  _loadFavoriteItems(); // Refresh list when item is deleted
+                  _loadFavoriteItems();
                 },
               ),
             ),
           );
-
-          // Refresh the list if changes were made
           if (result == true) {
             _loadFavoriteItems();
           }
         },
+      ),
+    );
+
+    return AnimatedScale(
+      key: ValueKey(passwordItem.id),
+      scale: isRemoving ? 0.95 : 1.0, // slight shrink while fading
+      duration: _removalAnimationDuration,
+      curve: Curves.easeInOut,
+      child: AnimatedOpacity(
+        opacity: isRemoving ? 0.0 : 1.0,
+        duration: _removalAnimationDuration,
+        curve: Curves.easeOut,
+        child: row,
       ),
     );
   }

@@ -140,6 +140,28 @@ class PasswordItemModel {
     this.isFavorite = false,
   });
 
+  PasswordItemModel copyWith({
+    int? id,
+    int? categoryId,
+    String? categoryName,
+    String? itemName,
+    Map<String, String>? fieldValues,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    bool? isFavorite,
+  }) {
+    return PasswordItemModel(
+      id: id ?? this.id,
+      categoryId: categoryId ?? this.categoryId,
+      categoryName: categoryName ?? this.categoryName,
+      itemName: itemName ?? this.itemName,
+      fieldValues: fieldValues ?? this.fieldValues,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      isFavorite: isFavorite ?? this.isFavorite,
+    );
+  }
+
   Map<String, dynamic> toMap() {
     return {
       'id': id,

@@ -31,6 +31,37 @@ class _CategoryPasswordListScreenState
   bool isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
+  Future<void> _toggleFavorite(PasswordItemModel item) async {
+    final originalFav = item.isFavorite;
+    final updatedItem = item.copyWith(isFavorite: !originalFav);
+
+    // Replace in both lists (immutable update)
+    void _applyItem(PasswordItemModel newItem) {
+      final i1 = passwordItems.indexWhere((e) => e.id == newItem.id);
+      if (i1 != -1) passwordItems[i1] = newItem;
+      final i2 = filteredPasswordItems.indexWhere((e) => e.id == newItem.id);
+      if (i2 != -1) filteredPasswordItems[i2] = newItem;
+    }
+
+    setState(() {
+      _applyItem(updatedItem);
+    });
+
+    final success = await _categoryService.toggleFavorite(
+      item.id!,
+      updatedItem.isFavorite,
+    );
+    if (!success && mounted) {
+      // rollback
+      setState(() {
+        _applyItem(item.copyWith(isFavorite: originalFav));
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to update favorite')),
+      );
+    }
+  }
+
   // Get category info for the new item screen
   IconData _getCategoryIcon(String categoryName) {
     switch (categoryName) {
@@ -259,6 +290,7 @@ class _CategoryPasswordListScreenState
 
   Widget _buildPasswordItem(PasswordItemModel passwordItem) {
     return Container(
+      key: ValueKey(passwordItem.id),
       color: Colors.white,
       child: ListTile(
         title: Text(
@@ -269,21 +301,9 @@ class _CategoryPasswordListScreenState
             color: Colors.black,
           ),
         ),
-        trailing: GestureDetector(
-          onTap: () async {
-            // Toggle favorite status
-            final newFavoriteStatus = !passwordItem.isFavorite;
-            final success = await _categoryService.toggleFavorite(
-              passwordItem.id!,
-              newFavoriteStatus,
-            );
-
-            if (success) {
-              // Refresh the list to show updated favorite status
-              _loadPasswordItems();
-            }
-          },
-          child: Icon(
+        trailing: IconButton(
+          onPressed: () => _toggleFavorite(passwordItem),
+          icon: Icon(
             passwordItem.isFavorite ? Icons.favorite : Icons.favorite_border,
             color: passwordItem.isFavorite
                 ? Colors.red
